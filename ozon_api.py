@@ -36,7 +36,7 @@ class OzonApi:
                     return "Error: " + str(e)
                 products = response.json()["result"]["products"]
                 count = len(products)
-                offset = count
+                offset += count
                 if prom['title'] not in candidates:
                     candidates[prom['title']] = []
                 candidates[prom['title']].extend(products)
