@@ -19,20 +19,23 @@ class OzonApi:
             return "Error: " + str(e)
         return response.json()["result"]
 
-    def get_prom_candidates(self, action_id, limit=100, offset=0):
+    def get_prom_candidates(self, proms, limit=100, offset=0):
         """
         A method for getting a list of products that can participate in the promotion by the promotion identifier.
         action_id -- Promotion identifier.
         limit -- Number of values in the response.
         offset -- Number of elements that will be skipped in the response.
         """
-        body = {"action_id": action_id, "limit": limit, "offset": offset}
-        try:
-            response = requests.post(self.url + "/v1/actions/candidates", headers=self.headers, data=body)
-            response.raise_for_status()
-        except requests.exceptions.RequestException as e:
-            return "Error: " + str(e)
-        return response.json()["result"]["products"]
+        candidates = {}
+        for prom in proms:
+            body = {"action_id": prom['id'], "limit": limit, "offset": offset}
+            try:
+                response = requests.post(self.url + "/v1/actions/candidates", headers=self.headers, data=body)
+                response.raise_for_status()
+            except requests.exceptions.RequestException as e:
+                return "Error: " + str(e)
+            candidates[prom['title']] = response.json()["result"]["products"]
+        return candidates
 
     def get_prom_conditions(self):
         """A method for getting conditions for adding products to promotions."""
