@@ -10,16 +10,16 @@ class OzonApi:
         self.url = "https://api-seller.ozon.ru"
         self.headers = {"Client-Id": client_id, "Api-Key": api_key}
 
-    def get_promotions(self):
+    def get_proms(self):
         """A method for getting a list of promotions."""
         try:
             response = requests.post(self.url + "/v1/actions", headers=self.headers)
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.RequestException as e:
             return "Error: " + str(e)
         return response.json()["result"]
 
-    def get_promotion_candidates(self, action_id, limit=100, offset=0):
+    def get_prom_candidates(self, action_id, limit=100, offset=0):
         """
         A method for getting a list of products that can participate in the promotion by the promotion identifier.
         action_id -- Promotion identifier.
@@ -30,10 +30,14 @@ class OzonApi:
         try:
             response = requests.post(self.url + "/v1/actions/candidates", headers=self.headers, data=body)
             response.raise_for_status()
-        except requests.exceptions.HTTPError as e:
+        except requests.exceptions.RequestException as e:
             return "Error: " + str(e)
         return response.json()["result"]["products"]
 
-    def get_promotion_conditions(self):
+    def get_prom_conditions(self):
+        """A method for getting conditions for adding products to promotions."""
         pass
 
+    def add_products_to_prom(self):
+        """A method for adding products to eligible promotions."""
+        pass
