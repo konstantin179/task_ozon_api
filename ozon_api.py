@@ -19,22 +19,27 @@ class OzonApi:
             return "Error: " + str(e)
         return response.json()["result"]
 
-    def get_prom_candidates(self, proms, limit=100, offset=0):
-        """
-        A method for getting a dict with proms and lists of products that can participate in these proms.
-        proms -- list of promotions.
-        limit -- Number of values in the response.
-        offset -- Number of elements that will be skipped in the response.
-        """
+    def get_prom_candidates(self):
+        """A method for getting a dict with proms and lists of products that can participate in these proms."""
+        proms = self.get_proms()
         candidates = {}
+        limit = 100        # Max number of values in the response.
         for prom in proms:
-            body = {"action_id": prom['id'], "limit": limit, "offset": offset}
-            try:
-                response = requests.post(self.url + "/v1/actions/candidates", headers=self.headers, data=body)
-                response.raise_for_status()
-            except requests.exceptions.RequestException as e:
-                return "Error: " + str(e)
-            candidates[prom['title']] = response.json()["result"]["products"]
+            offset = 0     # Number of elements that will be skipped in the response.
+            count = 100    # Number of values in the response.
+            while count >= 100:
+                body = {"action_id": prom['id'], "limit": limit, "offset": offset}
+                try:
+                    response = requests.post(self.url + "/v1/actions/candidates", headers=self.headers, data=body)
+                    response.raise_for_status()
+                except requests.exceptions.RequestException as e:
+                    return "Error: " + str(e)
+                products = response.json()["result"]["products"]
+                count = len(products)
+                offset = count
+                if prom['title'] not in candidates:
+                    candidates[prom['title']] = []
+                candidates[prom['title']].extend(products)
         return candidates
 
     def get_prom_conditions(self):
