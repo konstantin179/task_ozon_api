@@ -21,8 +21,8 @@ class OzonApi:
 
     def get_prom_candidates(self, proms, limit=100, offset=0):
         """
-        A method for getting a list of products that can participate in the promotion by the promotion identifier.
-        action_id -- Promotion identifier.
+        A method for getting a dict with proms and lists of products that can participate in these proms.
+        proms -- list of promotions.
         limit -- Number of values in the response.
         offset -- Number of elements that will be skipped in the response.
         """
