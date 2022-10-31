@@ -11,8 +11,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 
 class Report:
-    def __init__(self, client_id, client_secret):
-
+    def __init__(self, account_id, client_id, client_secret):
+        self.account_id = account_id
         self.url = "https://performance.ozon.ru:443"
         self.token_data = {"client_id": client_id,
                            "client_secret": client_secret,
@@ -73,9 +73,9 @@ class Report:
                 for row in reader:
                     # Change date format in row[31]
                     row[31] = datetime.datetime.strptime(row[31], "%d/%m/%Y").strftime("%Y-%m-%d")
-                    query_data = [self.token_data["client_id"]].extend(row[1:])
+                    query_data = [self.account_id].extend(row[1:])
                     cur.execute("""INSERT INTO reports 
-                        (client_id, banner, pagetype, viewtype, platfrom, request_type, sku,name, order_id,
+                        (account_id, banner, pagetype, viewtype, platfrom, request_type, sku,name, order_id,
                          order_number, ozon_id, ozon_id_ad_sku, articul, empty, account_id, views, clicks, audience,
                          exp_bonus, actionnum, avrg_bid, search_price_rur, search_price_perc, price, orders,
                          revenue_model, orders_model, revenue, expense, cpm, ctr, data, api_id)
@@ -139,8 +139,8 @@ class Report:
         self.token_time = time.time()
 
 
-def get_client_reports(client_id, client_secret, dates_and_types):
-    client_report = Report(client_id, client_secret)
+def get_client_reports(account_id, client_id, client_secret, dates_and_types):
+    client_report = Report(account_id, client_id, client_secret)
     for date_from, date_to, report_type in dates_and_types:
         client_report.get_report(date_from, date_to, report_type)
 
@@ -173,13 +173,13 @@ try:
         if acc_id not in accounts_data:
             accounts_data[acc_id] = {}
         accounts_data[acc_id][attribute_name[attribute_id]] = attribute_value
-
-    for acc_id, acc_data in accounts_data.values():
-        clients_and_dates.append((acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
     cursor.close()
     connection.close()
 except (Exception, psycopg2.Error) as error:
     print("PostgreSQL error:", error)
+
+for acc_id, acc_data in accounts_data.values():
+    clients_and_dates.append((acc_id, acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
 
 with ThreadPoolExecutor(16) as executor:
     executor.map(get_client_reports, clients_and_dates)

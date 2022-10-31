@@ -5,7 +5,7 @@ try:
     cursor = connection.cursor()
     cursor.execute("""CREATE TABLE reports (
                              id SERIAL PRIMARY KEY,
-                             client_id INT,
+                             account_id INT,
                              banner VARCHAR,
                              pagetype VARCHAR(20),
                              viewtype VARCHAR,                            
@@ -38,8 +38,8 @@ try:
                              ctr FLOAT,
                              data DATE,
                              api_id INT,
-                             FOREIGN KEY (client_id)
-                                 REFERENCES service_attr (client_id_performance)
+                             FOREIGN KEY (account_id)
+                                 REFERENCES account_list (id)
     );""")
     connection.commit()
     cursor.close()
