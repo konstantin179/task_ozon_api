@@ -6,6 +6,7 @@ from pathlib import Path
 import psycopg2
 import zipfile
 import csv
+import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -70,6 +71,8 @@ class Report:
                 reader = csv.reader(f)
                 next(reader)  # Skip the header row.
                 for row in reader:
+                    # Change date format in row[31]
+                    row[31] = datetime.datetime.strptime(row[31], "%d/%m/%Y").strftime("%Y-%m-%d")
                     query_data = [self.token_data["client_id"]].extend(row[1:])
                     cur.execute("""INSERT INTO reports 
                         (client_id, banner, pagetype, viewtype, platfrom, request_type, sku,name, order_id,
@@ -147,12 +150,32 @@ date_to = "2022-10-25"
 report_type = "TRAFFIC_SOURCES"  # or "ORDERS"
 report_dates_and_types = [(date_from, date_to, report_type), ]
 clients_and_dates = []
+attribute_name = {8: "client_secret", 9: "client_id"}
+accounts_data = {}    # {acc_id: {"client_id": ,"client_secret": }, }
+used_clients = set()
 try:
     connection = psycopg2.connect(dbname="postgres_db", user="postgres")
     cursor = connection.cursor()
-    cursor.execute("SELECT client_id_performance, client_secret_performance FROM service_attr;")
-    for client_id, client_secret in cursor.fetchall():
-        clients_and_dates.append((client_id, client_secret, report_dates_and_types))
+    cursor.execute("""SELECT al.id, asd.attribute_id, asd.attribute_value
+                        FROM account_list al JOIN account_service_data asd ON al.id = asd.account_id
+                       WHERE al.mp_id = 14
+                       ORDER BY al.id, asd.attribute_id DESC;""")
+    used_acc_id = None
+    for acc_id, attribute_id, attribute_value in cursor.fetchall():
+        if acc_id == used_acc_id:
+            continue
+        if attribute_name[attribute_id] == "client_id":
+            if attribute_value in used_clients:
+                used_acc_id = acc_id
+                continue
+            else:
+                used_clients.add(attribute_value)
+        if acc_id not in accounts_data:
+            accounts_data[acc_id] = {}
+        accounts_data[acc_id][attribute_name[attribute_id]] = attribute_value
+
+    for acc_id, acc_data in accounts_data.values():
+        clients_and_dates.append((acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
     cursor.close()
     connection.close()
 except (Exception, psycopg2.Error) as error:
