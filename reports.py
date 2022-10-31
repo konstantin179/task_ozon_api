@@ -24,6 +24,7 @@ class Report:
         timer = 0
         timestep = 5
         timeout = 20
+        ready = False
         while timer < timeout:
             ready = self._report_ready(uuid)
             if ready:
@@ -34,7 +35,7 @@ class Report:
             print(f"Report is not ready. client_id: {client_id}, dates: {date_to} -> {date_from}, type: {report_type}")
             return None
         link = self._get_link(uuid)
-        file_extension = link[-4:]
+        file_extension = Path(link).suffix
         filename = uuid + file_extension
         tmp_path = Path("tmp")
         tmp_path.mkdir(exist_ok=True)
@@ -65,7 +66,6 @@ class Report:
         try:
             conn = psycopg2.connect(dbname="postgres_db", user="postgres")
             cur = conn.cursor()
-            table_name = filepath.stem
             with open(filepath, 'r', encoding="utf-8") as f:
                 reader = csv.reader(f)
                 next(reader)  # Skip the header row.
