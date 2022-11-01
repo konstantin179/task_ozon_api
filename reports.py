@@ -145,6 +145,23 @@ def get_client_reports(account_id, client_id, client_secret, dates_and_types):
         client_report.get_report(date_from, date_to, report_type)
 
 
+def delete_duplicates_from_db_table(table_name):
+    try:
+        conn = psycopg2.connect(dbname="postgres_db", user="postgres")
+        cur = conn.cursor()
+        cur.execute("""DELETE FROM %s
+                        WHERE id NOT IN
+                        (
+                            SELECT MAX(id)
+                            FROM reports
+                            GROUP BY account_id, pagetype, sku, data
+                        );""", table_name)
+        conn.commit()
+        cur.close()
+        conn.close()
+    except (Exception, psycopg2.Error) as e:
+        print("PostgreSQL error:", e)
+
 date_from = "2022-08-01"
 date_to = "2022-10-25"
 report_type = "TRAFFIC_SOURCES"  # or "ORDERS"
@@ -156,6 +173,7 @@ used_clients = set()
 try:
     connection = psycopg2.connect(dbname="postgres_db", user="postgres")
     cursor = connection.cursor()
+    # Add WHERE ... AND al.status = 'Active' ???
     cursor.execute("""SELECT al.id, asd.attribute_id, asd.attribute_value
                         FROM account_list al JOIN account_service_data asd ON al.id = asd.account_id
                        WHERE al.mp_id = 14
@@ -183,3 +201,6 @@ for acc_id, acc_data in accounts_data.values():
 
 with ThreadPoolExecutor(16) as executor:
     executor.map(get_client_reports, clients_and_dates)
+
+delete_duplicates_from_db_table("reports")
+
