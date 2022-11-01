@@ -7,12 +7,47 @@ import psycopg2
 import zipfile
 import csv
 import datetime
+import csv
+import pandas as pd
+from io import StringIO
+from sqlalchemy import create_engine
+from sqlalchemy.exc import SQLAlchemyError
 from concurrent.futures import ThreadPoolExecutor
 
 
+def psql_insert_copy(table, conn, keys, data_iter):
+    """
+    Execute SQL statement inserting data
+
+    Parameters
+    ----------
+    table : pandas.io.sql.SQLTable
+    conn : sqlalchemy.engine.Engine or sqlalchemy.engine.Connection
+    keys : list of str
+        Column names
+    data_iter : Iterable that iterates the values to be inserted
+    """
+    # gets a DBAPI connection that can provide a cursor
+    dbapi_conn = conn.connection
+    with dbapi_conn.cursor() as cur:
+        s_buf = StringIO()
+        writer = csv.writer(s_buf)
+        writer.writerows(data_iter)
+        s_buf.seek(0)
+
+        columns = ', '.join(['"{}"'.format(k) for k in keys])
+        if table.schema:
+            table_name = '{}.{}'.format(table.schema, table.name)
+        else:
+            table_name = table.name
+
+        sql = 'COPY {} ({}) FROM STDIN WITH CSV'.format(
+            table_name, columns)
+        cur.copy_expert(sql=sql, file=s_buf)
+
+
 class Report:
-    def __init__(self, account_id, client_id, client_secret):
-        self.account_id = account_id
+    def __init__(self, client_id, client_secret):
         self.url = "https://performance.ozon.ru:443"
         self.token_data = {"client_id": client_id,
                            "client_secret": client_secret,
@@ -22,6 +57,7 @@ class Report:
 
     def get_report(self, date_from, date_to, report_type):
         uuid = self._request_report(date_from, date_to, report_type)
+        client_id = self.token_data["client_id"]
         timer = 0
         timestep = 5
         timeout = 20
@@ -64,30 +100,17 @@ class Report:
         print(f"Report saved to db. client_id: {client_id}, dates: {date_to} -> {date_from}, type: {report_type}")
 
     def add_csvfile_to_db(self, filepath):
+        client_id = self.token_data["client_id"]
+        df = pd.read_csv(filepath, encoding="utf-8")
+        # Drop first column with id.
+        df.drop(columns=df.columns[0], axis=1, inplace=True)
+        # Place client_id to api_id field.
+        df["api_id"] = client_id
         try:
-            conn = psycopg2.connect(dbname="postgres_db", user="postgres")
-            cur = conn.cursor()
-            with open(filepath, 'r', encoding="utf-8") as f:
-                reader = csv.reader(f)
-                next(reader)  # Skip the header row.
-                for row in reader:
-                    # Change date format in row[31]
-                    row[31] = datetime.datetime.strptime(row[31], "%d/%m/%Y").strftime("%Y-%m-%d")
-                    query_data = [self.account_id].extend(row[1:])
-                    cur.execute("""INSERT INTO reports 
-                        (account_id, banner, pagetype, viewtype, platfrom, request_type, sku,name, order_id,
-                         order_number, ozon_id, ozon_id_ad_sku, articul, empty, account_id, views, clicks, audience,
-                         exp_bonus, actionnum, avrg_bid, search_price_rur, search_price_perc, price, orders,
-                         revenue_model, orders_model, revenue, expense, cpm, ctr, data, api_id)
-                        VALUES 
-                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                         %s, %s, %s, %s, %s, %s, %s, %s, %s);""", query_data)
-
-            conn.commit()
-            cur.close()
-            conn.close()
-        except (Exception, psycopg2.Error) as e:
-            print("PostgreSQL error:", e)
+            engine = create_engine('postgresql://myusername:mypassword@myhost:5432/mydatabase')
+            df.to_sql('reports', engine, if_exists='append', method=psql_insert_copy)
+        except (Exception, SQLAlchemyError) as e:
+            print("DB error:", e)
 
     def _request_report(self, date_from, date_to, report_type):
         self._update_token()
@@ -139,8 +162,8 @@ class Report:
         self.token_time = time.time()
 
 
-def get_client_reports(account_id, client_id, client_secret, dates_and_types):
-    client_report = Report(account_id, client_id, client_secret)
+def get_client_reports(client_id, client_secret, dates_and_types):
+    client_report = Report(client_id, client_secret)
     for date_from, date_to, report_type in dates_and_types:
         client_report.get_report(date_from, date_to, report_type)
 
@@ -149,58 +172,66 @@ def delete_duplicates_from_db_table(table_name):
     try:
         conn = psycopg2.connect(dbname="postgres_db", user="postgres")
         cur = conn.cursor()
-        cur.execute("""DELETE FROM %s
-                        WHERE id NOT IN
-                        (
-                            SELECT MAX(id)
-                            FROM reports
-                            GROUP BY account_id, pagetype, sku, data
-                        );""", table_name)
+        delete_query = f"""DELETE FROM {table_name} 
+                            WHERE ctid IN 
+                                (SELECT ctid 
+                                   FROM (SELECT ctid,
+                                                row_number() OVER (PARTITION BY pagetype, sku, data, api_id
+                                                ORDER BY id DESC) AS row_num
+                                         FROM {table_name}
+                                        ) t
+                                  WHERE t.row_num > 1
+                                );"""
+        cur.execute(delete_query)
         conn.commit()
         cur.close()
         conn.close()
     except (Exception, psycopg2.Error) as e:
         print("PostgreSQL error:", e)
 
+
+def get_accounts_data_from_db():
+    attribute_name = {8: "client_secret", 9: "client_id"}
+    accounts_data = {}  # {acc_id: {"client_id": ,"client_secret": }, }
+    used_clients = set()
+    try:
+        connection = psycopg2.connect(dbname="postgres_db", user="postgres")
+        cursor = connection.cursor()
+        cursor.execute("""SELECT al.id, asd.attribute_id, asd.attribute_value
+                            FROM account_list al JOIN account_service_data asd ON al.id = asd.account_id
+                           WHERE al.mp_id = 14 AND al.status = 'Active'
+                           ORDER BY al.id, asd.attribute_id DESC;""")
+        used_acc_id = None
+        for acc_id, attribute_id, attribute_value in cursor.fetchall():
+            if acc_id == used_acc_id:
+                continue
+            if attribute_name[attribute_id] == "client_id":
+                if attribute_value in used_clients:
+                    used_acc_id = acc_id
+                    continue
+                else:
+                    used_clients.add(attribute_value)
+            if acc_id not in accounts_data:
+                accounts_data[acc_id] = {}
+            accounts_data[acc_id][attribute_name[attribute_id]] = attribute_value
+        cursor.close()
+        connection.close()
+    except (Exception, psycopg2.Error) as error:
+        print("PostgreSQL error:", error)
+    return accounts_data
+
+
 date_from = "2022-08-01"
 date_to = "2022-10-25"
 report_type = "TRAFFIC_SOURCES"  # or "ORDERS"
 report_dates_and_types = [(date_from, date_to, report_type), ]
 clients_and_dates = []
-attribute_name = {8: "client_secret", 9: "client_id"}
-accounts_data = {}    # {acc_id: {"client_id": ,"client_secret": }, }
-used_clients = set()
-try:
-    connection = psycopg2.connect(dbname="postgres_db", user="postgres")
-    cursor = connection.cursor()
-    # Add WHERE ... AND al.status = 'Active' ???
-    cursor.execute("""SELECT al.id, asd.attribute_id, asd.attribute_value
-                        FROM account_list al JOIN account_service_data asd ON al.id = asd.account_id
-                       WHERE al.mp_id = 14
-                       ORDER BY al.id, asd.attribute_id DESC;""")
-    used_acc_id = None
-    for acc_id, attribute_id, attribute_value in cursor.fetchall():
-        if acc_id == used_acc_id:
-            continue
-        if attribute_name[attribute_id] == "client_id":
-            if attribute_value in used_clients:
-                used_acc_id = acc_id
-                continue
-            else:
-                used_clients.add(attribute_value)
-        if acc_id not in accounts_data:
-            accounts_data[acc_id] = {}
-        accounts_data[acc_id][attribute_name[attribute_id]] = attribute_value
-    cursor.close()
-    connection.close()
-except (Exception, psycopg2.Error) as error:
-    print("PostgreSQL error:", error)
+accounts_data = get_accounts_data_from_db()
 
 for acc_id, acc_data in accounts_data.values():
-    clients_and_dates.append((acc_id, acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
+    clients_and_dates.append((acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
 
 with ThreadPoolExecutor(16) as executor:
     executor.map(get_client_reports, clients_and_dates)
 
 delete_duplicates_from_db_table("reports")
-
