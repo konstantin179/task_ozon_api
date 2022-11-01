@@ -106,6 +106,8 @@ class Report:
         df.drop(columns=df.columns[0], axis=1, inplace=True)
         # Place client_id to api_id field.
         df["api_id"] = client_id
+        # Change date format in df["data"]
+        df["data"] = pd.to_datetime(df["data"])
         try:
             engine = create_engine('postgresql://myusername:mypassword@myhost:5432/mydatabase')
             df.to_sql('reports', engine, if_exists='append', method=psql_insert_copy)
