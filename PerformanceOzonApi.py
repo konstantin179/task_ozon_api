@@ -3,50 +3,16 @@ import requests
 import time
 import urllib.request
 from pathlib import Path
-import psycopg2
 import zipfile
-import csv
-import datetime
-import csv
 import pandas as pd
-from io import StringIO
 from sqlalchemy import create_engine
 from sqlalchemy.exc import SQLAlchemyError
-from concurrent.futures import ThreadPoolExecutor
+from postgres import psql_insert_copy
+from dotenv import load_dotenv
 
 
-def psql_insert_copy(table, conn, keys, data_iter):
-    """
-    Execute SQL statement inserting data
-
-    Parameters
-    ----------
-    table : pandas.io.sql.SQLTable
-    conn : sqlalchemy.engine.Engine or sqlalchemy.engine.Connection
-    keys : list of str
-        Column names
-    data_iter : Iterable that iterates the values to be inserted
-    """
-    # gets a DBAPI connection that can provide a cursor
-    dbapi_conn = conn.connection
-    with dbapi_conn.cursor() as cur:
-        s_buf = StringIO()
-        writer = csv.writer(s_buf)
-        writer.writerows(data_iter)
-        s_buf.seek(0)
-
-        columns = ', '.join(['"{}"'.format(k) for k in keys])
-        if table.schema:
-            table_name = '{}.{}'.format(table.schema, table.name)
-        else:
-            table_name = table.name
-
-        sql = 'COPY {} ({}) FROM STDIN WITH CSV'.format(
-            table_name, columns)
-        cur.copy_expert(sql=sql, file=s_buf)
-
-
-class Report:
+class PerformanceOzonClient:
+    """Class represents a client to work with Ozon Performance API."""
     def __init__(self, client_id, client_secret):
         self.url = "https://performance.ozon.ru:443"
         self.token_data = {"client_id": client_id,
@@ -56,6 +22,7 @@ class Report:
         self.token = None
 
     def get_report(self, date_from, date_to, report_type):
+        """Downloads report and writes it in db."""
         uuid = self._request_report(date_from, date_to, report_type)
         client_id = self.token_data["client_id"]
         timer = 0
@@ -80,6 +47,7 @@ class Report:
         some_url = ''
         urllib.request.urlretrieve(some_url + link, file_path)
         if file_extension == '.zip':
+            # extract csv files from zip and add them to db
             zipdir_path = file_path.with_suffix('')
             zipdir_path.mkdir()
             try:
@@ -90,16 +58,17 @@ class Report:
                 return None
             csv_files = zipdir_path.glob('*')
             for file in csv_files:
-                self.add_csvfile_to_db(file)
+                self._add_csvfile_to_db(file)
                 os.remove(file)
             os.rmdir(zipdir_path)
             os.remove(file_path)
-        else:
-            self.add_csvfile_to_db(file_path)
+        else:    # add one csv file to db
+            self._add_csvfile_to_db(file_path)
             os.remove(file_path)
         print(f"Report saved to db. client_id: {client_id}, dates: {date_to} -> {date_from}, type: {report_type}")
 
-    def add_csvfile_to_db(self, filepath):
+    def _add_csvfile_to_db(self, filepath):
+        """Adds report's data from csv to db."""
         client_id = self.token_data["client_id"]
         df = pd.read_csv(filepath, encoding="utf-8")
         # Drop first column with id.
@@ -109,12 +78,17 @@ class Report:
         # Change date format in df["data"]
         df["data"] = pd.to_datetime(df["data"])
         try:
-            engine = create_engine('postgresql://myusername:mypassword@myhost:5432/mydatabase')
+            load_dotenv()
+            sqlalch_db_conn_str = os.getenv("SQLALCH_DB_CONN")
+            # Like 'postgresql://myusername:mypassword@myhost:5432/mydatabase'
+            engine = create_engine(sqlalch_db_conn_str)
             df.to_sql('reports', engine, if_exists='append', method=psql_insert_copy)
         except (Exception, SQLAlchemyError) as e:
             print("DB error:", e)
 
     def _request_report(self, date_from, date_to, report_type):
+        """Requests report from ozon performance.
+        Returns report's UUID."""
         self._update_token()
         headers = {"Authorization": self.token["token_type"] + ' ' + self.token["access_token"]}
         try:
@@ -125,6 +99,8 @@ class Report:
         return response.json()["UUID"]
 
     def _report_ready(self, uuid):
+        """Checks if report is ready.
+        Returns True if ready, False if not."""
         self._update_token()
         headers = {"Authorization": self.token["token_type"] + ' ' + self.token["access_token"]}
         try:
@@ -141,6 +117,7 @@ class Report:
         return False
 
     def _get_link(self, uuid):
+        """Returns link to download report file."""
         self._update_token()
         headers = {"Authorization": self.token["token_type"] + ' ' + self.token["access_token"]}
         try:
@@ -151,6 +128,7 @@ class Report:
         return response.json()["contentDisposition"]
 
     def _update_token(self):
+        """Updates the token if its time has expired."""
         if self.token:
             time_left = time.time() - self.token_time
             if self.token["expires_in"] > time_left:
@@ -164,76 +142,9 @@ class Report:
         self.token_time = time.time()
 
 
-def get_client_reports(client_id, client_secret, dates_and_types):
-    client_report = Report(client_id, client_secret)
-    for date_from, date_to, report_type in dates_and_types:
-        client_report.get_report(date_from, date_to, report_type)
 
 
-def delete_duplicates_from_db_table(table_name):
-    try:
-        conn = psycopg2.connect(dbname="postgres_db", user="postgres")
-        cur = conn.cursor()
-        delete_query = f"""DELETE FROM {table_name} 
-                            WHERE ctid IN 
-                                (SELECT ctid 
-                                   FROM (SELECT ctid,
-                                                row_number() OVER (PARTITION BY pagetype, sku, data, api_id
-                                                ORDER BY id DESC) AS row_num
-                                         FROM {table_name}
-                                        ) t
-                                  WHERE t.row_num > 1
-                                );"""
-        cur.execute(delete_query)
-        conn.commit()
-        cur.close()
-        conn.close()
-    except (Exception, psycopg2.Error) as e:
-        print("PostgreSQL error:", e)
 
 
-def get_accounts_data_from_db():
-    attribute_name = {8: "client_secret", 9: "client_id"}
-    accounts_data = {}  # {acc_id: {"client_id": ,"client_secret": }, }
-    used_clients = set()
-    try:
-        connection = psycopg2.connect(dbname="postgres_db", user="postgres")
-        cursor = connection.cursor()
-        cursor.execute("""SELECT al.id, asd.attribute_id, asd.attribute_value
-                            FROM account_list al JOIN account_service_data asd ON al.id = asd.account_id
-                           WHERE al.mp_id = 14 AND al.status = 'Active'
-                           ORDER BY al.id, asd.attribute_id DESC;""")
-        used_acc_id = None
-        for acc_id, attribute_id, attribute_value in cursor.fetchall():
-            if acc_id == used_acc_id:
-                continue
-            if attribute_name[attribute_id] == "client_id":
-                if attribute_value in used_clients:
-                    used_acc_id = acc_id
-                    continue
-                else:
-                    used_clients.add(attribute_value)
-            if acc_id not in accounts_data:
-                accounts_data[acc_id] = {}
-            accounts_data[acc_id][attribute_name[attribute_id]] = attribute_value
-        cursor.close()
-        connection.close()
-    except (Exception, psycopg2.Error) as error:
-        print("PostgreSQL error:", error)
-    return accounts_data
 
 
-date_from = "2022-08-01"
-date_to = "2022-10-25"
-report_type = "TRAFFIC_SOURCES"  # or "ORDERS"
-report_dates_and_types = [(date_from, date_to, report_type), ]
-clients_and_dates = []
-accounts_data = get_accounts_data_from_db()
-
-for acc_id, acc_data in accounts_data.values():
-    clients_and_dates.append((acc_data["client_id"], acc_data["client_secret"], report_dates_and_types))
-
-with ThreadPoolExecutor(16) as executor:
-    executor.map(get_client_reports, clients_and_dates)
-
-delete_duplicates_from_db_table("reports")
