@@ -1,5 +1,5 @@
 import os
-from PerformanceOzonApi import PerformanceOzonClient
+from performance_ozon_api import PerformanceOzonClient
 from postgres import DB
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv

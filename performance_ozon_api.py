@@ -23,22 +23,12 @@ class PerformanceOzonClient:
 
     def get_report(self, date_from, date_to, report_type):
         """Downloads report and writes it in db."""
-        uuid = self._request_report(date_from, date_to, report_type)
         client_id = self.token_data["client_id"]
-        timer = 0
-        timestep = 5
-        timeout = 20
-        ready = False
-        while timer < timeout:
-            ready = self._report_ready(uuid)
-            if ready:
-                break
-            time.sleep(timestep)
-            timer += timestep
-        if not ready:
+        uuid = self.request_report(date_from, date_to, report_type)
+        link = self.get_link_to_requested_report(uuid)
+        if not link:    # Report is not ready
             print(f"Report is not ready. client_id: {client_id}, dates: {date_to} -> {date_from}, type: {report_type}")
             return None
-        link = self._get_link(uuid)
         file_extension = Path(link).suffix
         filename = uuid + file_extension
         tmp_path = Path("tmp")
@@ -67,6 +57,24 @@ class PerformanceOzonClient:
             os.remove(file_path)
         print(f"Report saved to db. client_id: {client_id}, dates: {date_to} -> {date_from}, type: {report_type}")
 
+    def get_link_to_requested_report(self, uuid):
+        """Returns link to report if report is ready.
+        Returns None if"""
+        timer = 0
+        timestep = 5
+        timeout = 20
+        ready = False
+        while timer < timeout:
+            ready = self._report_ready(uuid)
+            if ready:
+                break
+            time.sleep(timestep)
+            timer += timestep
+        if not ready:
+            return None
+        link = self._get_link(uuid)
+        return link
+
     def _add_csvfile_to_db(self, filepath):
         """Adds report's data from csv to db."""
         client_id = self.token_data["client_id"]
@@ -86,7 +94,7 @@ class PerformanceOzonClient:
         except (Exception, SQLAlchemyError) as e:
             print("DB error:", e)
 
-    def _request_report(self, date_from, date_to, report_type):
+    def request_report(self, date_from, date_to, report_type):
         """Requests report from ozon performance.
         Returns report's UUID."""
         self._update_token()
